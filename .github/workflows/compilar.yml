@@ -1,0 +1,83 @@
+# Guarda este archivo en tu repositorio como:  .github/workflows/compilar.yml
+# Sube HordaCero.zip (sin descomprimir) a la raiz del repositorio y el APK
+# aparecera en la pestana "Actions" > ultima ejecucion > "Artifacts".
+name: Compilar APK
+
+on:
+  push:
+  workflow_dispatch:
+
+env:
+  GODOT_VERSION: "4.7"   # cambia esto si usas otra version (ej. "4.3" o "4.7.1")
+
+jobs:
+  android:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Descomprimir el ZIP del proyecto
+        run: |
+          ZIP=$(ls *.zip 2>/dev/null | head -n 1 || true)
+          if [ -n "$ZIP" ]; then
+            mkdir -p proyecto
+            unzip -q -o "$ZIP" -d proyecto
+          fi
+          GODOT_FILE=$(find . -name project.godot -not -path "./.git/*" | head -n 1)
+          if [ -z "$GODOT_FILE" ]; then
+            echo "No se encontro project.godot"
+            exit 1
+          fi
+          echo "PROJ=$(cd "$(dirname "$GODOT_FILE")" && pwd)" >> "$GITHUB_ENV"
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Descargar Godot y plantillas de exportacion
+        run: |
+          BASE="https://github.com/godotengine/godot/releases/download/${GODOT_VERSION}-stable"
+          wget -q "$BASE/Godot_v${GODOT_VERSION}-stable_linux.x86_64.zip"
+          wget -q "$BASE/Godot_v${GODOT_VERSION}-stable_export_templates.tpz"
+          unzip -q "Godot_v${GODOT_VERSION}-stable_linux.x86_64.zip" -d godot_bin
+          mv godot_bin/Godot_v*_linux.x86_64 "$HOME/godot"
+          chmod +x "$HOME/godot"
+          mkdir -p "$HOME/.local/share/godot/export_templates/${GODOT_VERSION}.stable"
+          unzip -q "Godot_v${GODOT_VERSION}-stable_export_templates.tpz" -d tpl
+          mv tpl/templates/* "$HOME/.local/share/godot/export_templates/${GODOT_VERSION}.stable/"
+
+      - name: Preparar firma de depuracion y SDK de Android
+        run: |
+          keytool -genkeypair -keystore "$HOME/debug.keystore" -storepass android \
+            -alias androiddebugkey -keypass android -keyalg RSA -keysize 2048 \
+            -validity 10000 -dname "CN=Android Debug,O=Android,C=US"
+          mkdir -p "$HOME/.config/godot"
+          MINOR=$(echo "$GODOT_VERSION" | cut -d. -f1,2)
+          cat > "$HOME/.config/godot/editor_settings-${MINOR}.tres" <<EOF2
+          [gd_resource type="EditorSettings" format=3]
+
+          [resource]
+          export/android/android_sdk_path = "$ANDROID_HOME"
+          export/android/java_sdk_path = "$JAVA_HOME"
+          export/android/debug_keystore = "$HOME/debug.keystore"
+          export/android/debug_keystore_user = "androiddebugkey"
+          export/android/debug_keystore_pass = "android"
+          EOF2
+
+      - name: Exportar APK
+        env:
+          GODOT_ANDROID_KEYSTORE_DEBUG_PATH: /home/runner/debug.keystore
+          GODOT_ANDROID_KEYSTORE_DEBUG_USER: androiddebugkey
+          GODOT_ANDROID_KEYSTORE_DEBUG_PASSWORD: android
+        run: |
+          mkdir -p "$GITHUB_WORKSPACE/build"
+          "$HOME/godot" --headless --path "$PROJ" --import || true
+          "$HOME/godot" --headless --path "$PROJ" --export-debug "Android" "$GITHUB_WORKSPACE/build/HordaCero.apk"
+          test -f "$GITHUB_WORKSPACE/build/HordaCero.apk"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: HordaCero-apk
+          path: build/HordaCero.apk
+          
