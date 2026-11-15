@@ -33,6 +33,7 @@ var settings_back := ""
 var screen := ""
 var inset := Vector4.ZERO
 var inset_t := 0.0
+var redraw_i := 0
 
 
 func setup(g) -> void:
@@ -240,6 +241,7 @@ func show_settings(back: String) -> void:
 	var opts := [
 		["sombras", "Sombras de la linterna", "Bonitas pero caras; en algunos móviles apagan la luz"],
 		["relieve", "Relieve en texturas", "Mapas de normales: la luz da volumen al suelo y a los personajes"],
+		["res_reducida", "Resolución reducida", "Dibuja a 720p y escala: muchos más FPS en móviles"],
 		["vibracion", "Vibración", "Al recibir golpes y con explosiones"],
 		["depuracion", "Modo depuración", "Panel de rendimiento y registro detallado para informes"],
 	]
@@ -463,7 +465,10 @@ func _process(delta: float) -> void:
 	alert_flash = maxf(0.0, alert_flash - delta * 0.8)
 	msg_t = maxf(0.0, msg_t - delta)
 	banner_t = maxf(0.0, banner_t - delta)
-	queue_redraw()
+	# Redibujar el HUD cuesta CPU: a 30 Hz basta, salvo mientras se mueven los joysticks.
+	redraw_i += 1
+	if redraw_i % 2 == 0 or move_id != -1 or aim_id != -1 or hurt_t > 0.0:
+		queue_redraw()
 
 
 func _text(pos: Vector2, text: String, sz: int, col: Color, align := HORIZONTAL_ALIGNMENT_LEFT, width := -1.0) -> void:

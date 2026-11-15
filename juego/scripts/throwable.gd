@@ -54,7 +54,7 @@ func setup(g, k: String, from: Vector2, to: Vector2) -> void:
 		light.energy = 0.0
 		fly = 0.0
 		landed = true
-		field = game.compute_field(from)
+		field = game.compute_field(from, 32)
 		game.lures.append(self)
 	else:
 		life = 4.0
@@ -123,7 +123,7 @@ func _process(delta: float) -> void:
 func _land() -> void:
 	landed = true
 	spr.scale = Vector2(0.55, 0.55)
-	field = game.compute_field(global_position)
+	field = game.compute_field(global_position, 32)
 	game.lures.append(self)
 	if kind == "flare":
 		game.sfx.play("hiss", -6.0, global_position)

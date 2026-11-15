@@ -108,6 +108,15 @@ var upgrades := {}
 var debug
 var prof := {"ia": 0, "campo": 0, "balas": 0, "restos": 0, "efectos": 0, "hud": 0}
 var fs_t := 0.0
+var bfs_q := PackedInt32Array()
+# Campo del jugador: se calcula entero (todo el mapa) pero repartido en varios fotogramas.
+var pf_build := PackedInt32Array()
+var pf_q := PackedInt32Array()
+var pf_head := 0
+var pf_tail := 0
+var pf_active := false
+var lamp_lights: Array = []
+var cull_t := 0.0
 
 
 func _ready() -> void:
@@ -116,6 +125,7 @@ func _ready() -> void:
 	Dbg.init_session()
 	Dbg.enabled = settings["depuracion"]
 	ensure_fullscreen()
+	apply_resolution()
 	sfx = SfxScript.new()
 	add_child(sfx)
 	var layer := CanvasLayer.new()
@@ -162,7 +172,7 @@ func _load_settings() -> void:
 	if not settings.is_empty():
 		return
 	var mobile := OS.has_feature("mobile")
-	settings = {"sombras": not mobile, "relieve": true, "vibracion": true, "depuracion": false}
+	settings = {"sombras": not mobile, "relieve": true, "vibracion": true, "depuracion": false, "res_reducida": mobile}
 	var cf := ConfigFile.new()
 	if cf.load("user://ajustes.cfg") == OK:
 		for k in settings:
@@ -186,6 +196,15 @@ func set_setting(k: String, v) -> void:
 		"depuracion":
 			Dbg.enabled = v
 			debug.queue_redraw()
+		"res_reducida":
+			apply_resolution()
+
+
+# Resolucion reducida: el juego se dibuja a 720 p de alto y se escala a la pantalla.
+# En un movil de 2400x1080 son ~2,3 veces menos pixeles que calcular.
+func apply_resolution() -> void:
+	var root := get_tree().root
+	root.content_scale_mode = Window.CONTENT_SCALE_MODE_VIEWPORT if settings["res_reducida"] else Window.CONTENT_SCALE_MODE_CANVAS_ITEMS
 
 
 func ensure_fullscreen() -> void:
@@ -271,7 +290,7 @@ func _build_world() -> void:
 	cam.position = player.position
 	add_child(cam)
 	cam.make_current()
-	pfield = compute_field(player.position)
+	pfield = compute_field(player.position, GW)
 
 
 func _gen_map() -> void:
@@ -617,6 +636,7 @@ func _lamps() -> void:
 		l.height = 120.0
 		l.position = p + Vector2.from_angle(ang) * 34.0
 		world.add_child(l)
+		lamp_lights.append(l)
 		if rng.randf() < 0.3:
 			flicker.append(l)
 		_solid_circle(p, 5.0, false)
@@ -733,13 +753,20 @@ func _cell(p: Vector2) -> Vector2i:
 	return Vector2i(clampi(int(p.x / CELL), 0, GW - 1), clampi(int(p.y / CELL), 0, GW - 1))
 
 
-func compute_field(target: Vector2) -> PackedInt32Array:
+# Campo de flujo (BFS) limitado a un radio de celdas alrededor del objetivo: fuera de el,
+# los infectados caminan en linea recta hasta entrar en la zona.
+func compute_field(target: Vector2, radius := 26) -> PackedInt32Array:
 	var f := PackedInt32Array()
 	f.resize(GW * GW)
 	f.fill(-1)
-	var q := PackedInt32Array()
-	q.resize(GW * GW)
+	if bfs_q.size() != GW * GW:
+		bfs_q.resize(GW * GW)
+	var q := bfs_q
 	var tc := _cell(target)
+	var x0 := maxi(0, tc.x - radius)
+	var x1 := mini(GW - 1, tc.x + radius)
+	var y0 := maxi(0, tc.y - radius)
+	var y1 := mini(GW - 1, tc.y + radius)
 	var head := 0
 	var tail := 0
 	var ti := tc.y * GW + tc.x
@@ -752,23 +779,75 @@ func compute_field(target: Vector2) -> PackedInt32Array:
 		var x := i % GW
 		var y := i / GW
 		var d := f[i] + 1
-		if x > 0 and f[i - 1] < 0 and blocked[i - 1] == 0:
+		if x > x0 and f[i - 1] < 0 and blocked[i - 1] == 0:
 			f[i - 1] = d
 			q[tail] = i - 1
 			tail += 1
-		if x < GW - 1 and f[i + 1] < 0 and blocked[i + 1] == 0:
+		if x < x1 and f[i + 1] < 0 and blocked[i + 1] == 0:
 			f[i + 1] = d
 			q[tail] = i + 1
 			tail += 1
-		if y > 0 and f[i - GW] < 0 and blocked[i - GW] == 0:
+		if y > y0 and f[i - GW] < 0 and blocked[i - GW] == 0:
 			f[i - GW] = d
 			q[tail] = i - GW
 			tail += 1
-		if y < GW - 1 and f[i + GW] < 0 and blocked[i + GW] == 0:
+		if y < y1 and f[i + GW] < 0 and blocked[i + GW] == 0:
 			f[i + GW] = d
 			q[tail] = i + GW
 			tail += 1
 	return f
+
+
+func _pf_start(tc: Vector2i) -> void:
+	pf_build = PackedInt32Array()
+	pf_build.resize(GW * GW)
+	pf_build.fill(-1)
+	if pf_q.size() != GW * GW:
+		pf_q.resize(GW * GW)
+	var ti := tc.y * GW + tc.x
+	pf_build[ti] = 0
+	pf_q[0] = ti
+	pf_head = 0
+	pf_tail = 1
+	pf_active = true
+
+
+func _pf_step(budget: int) -> void:
+	var f := pf_build
+	var q := pf_q
+	var n := 0
+	while pf_head < pf_tail and n < budget:
+		n += 1
+		var i := q[pf_head]
+		pf_head += 1
+		var x := i % GW
+		var y := i / GW
+		var d := f[i] + 1
+		if x > 0 and f[i - 1] < 0 and blocked[i - 1] == 0:
+			f[i - 1] = d
+			q[pf_tail] = i - 1
+			pf_tail += 1
+		if x < GW - 1 and f[i + 1] < 0 and blocked[i + 1] == 0:
+			f[i + 1] = d
+			q[pf_tail] = i + 1
+			pf_tail += 1
+		if y > 0 and f[i - GW] < 0 and blocked[i - GW] == 0:
+			f[i - GW] = d
+			q[pf_tail] = i - GW
+			pf_tail += 1
+		if y < GW - 1 and f[i + GW] < 0 and blocked[i + GW] == 0:
+			f[i + GW] = d
+			q[pf_tail] = i + GW
+			pf_tail += 1
+	pf_build = f
+	pf_q = q
+	if pf_head >= pf_tail:
+		pf_active = false
+		pfield = pf_build
+
+
+const NB_X := [-1, 0, 1, -1, 1, -1, 0, 1]
+const NB_Y := [-1, -1, -1, 0, 0, 1, 1, 1]
 
 
 func field_dir(f: PackedInt32Array, pos: Vector2) -> Vector2:
@@ -779,27 +858,24 @@ func field_dir(f: PackedInt32Array, pos: Vector2) -> Vector2:
 	var best := f[cy * GW + cx]
 	if best < 0:
 		best = 1 << 30
-	var target := Vector2.ZERO
-	var found := false
-	for dy in [-1, 0, 1]:
-		for dx in [-1, 0, 1]:
-			if dx == 0 and dy == 0:
-				continue
-			var nx: int = cx + dx
-			var ny: int = cy + dy
-			if nx < 0 or ny < 0 or nx >= GW or ny >= GW:
-				continue
-			var v := f[ny * GW + nx]
-			if v < 0 or v >= best:
-				continue
-			if dx != 0 and dy != 0 and (blocked[cy * GW + nx] != 0 or blocked[ny * GW + cx] != 0):
-				continue
-			best = v
-			target = Vector2((nx + 0.5) * CELL, (ny + 0.5) * CELL)
-			found = true
-	if not found:
+	var bx := -1
+	var by := -1
+	for k in 8:
+		var nx: int = cx + NB_X[k]
+		var ny: int = cy + NB_Y[k]
+		if nx < 0 or ny < 0 or nx >= GW or ny >= GW:
+			continue
+		var v := f[ny * GW + nx]
+		if v < 0 or v >= best:
+			continue
+		if nx != cx and ny != cy and (blocked[cy * GW + nx] != 0 or blocked[ny * GW + cx] != 0):
+			continue
+		best = v
+		bx = nx
+		by = ny
+	if bx < 0:
 		return Vector2.ZERO
-	return (target - pos).normalized()
+	return (Vector2((bx + 0.5) * CELL, (by + 0.5) * CELL) - pos).normalized()
 
 
 func lure_for(pos: Vector2):
@@ -1041,14 +1117,17 @@ func _physics_process(delta: float) -> void:
 	prof["restos"] += t2 - t1
 	if not playing:
 		return
-	pfield_t -= delta
-	if pfield_t <= 0.0:
-		pfield_t = 0.3
-		var c := _cell(player.global_position)
-		if c != pcell:
-			pcell = c
-			pfield = compute_field(player.global_position)
-			prof["campo"] += Time.get_ticks_usec() - t2
+	if pf_active:
+		_pf_step(1700)
+		prof["campo"] += Time.get_ticks_usec() - t2
+	else:
+		pfield_t -= delta
+		if pfield_t <= 0.0:
+			pfield_t = 0.25
+			var c := _cell(player.global_position)
+			if c != pcell:
+				pcell = c
+				_pf_start(c)
 
 
 func _process(delta: float) -> void:
@@ -1060,6 +1139,15 @@ func _process(delta: float) -> void:
 	if fs_t <= 0.0:
 		fs_t = 3.0
 		ensure_fullscreen()
+	# Apaga las farolas que no se ven: cada luz encendida obliga a la GPU a recalcular
+	# todos los pixeles que toca (y el suelo ocupa toda la ciudad).
+	cull_t -= delta
+	if cull_t <= 0.0:
+		cull_t = 0.2
+		var view := get_viewport_rect().size / cam.zoom
+		var reach := view.length() * 0.5 + 300.0
+		for l in lamp_lights:
+			l.enabled = l.position.distance_to(cam.position) < reach
 	_update_camera(delta)
 	_update_pickups(delta)
 	blink_t -= delta
@@ -1074,7 +1162,7 @@ func _process(delta: float) -> void:
 	time_played += delta
 	quiet_t -= delta
 	if quiet_t <= 0.0:
-		alert = maxf(0.0, alert - delta * 4.0)
+		alert = maxf(0.0, alert - delta * 6.0)
 	_director(delta)
 
 
@@ -1106,7 +1194,7 @@ func make_noise(pos: Vector2, radius: float, alert_add: float) -> void:
 				z.hear(pos)
 		if radius > 150.0:
 			fx_top.add(fx_top.RING, pos, Vector2.ZERO, 0.5, radius, Color(0.9, 0.9, 1.0, 0.12))
-	if alert_add > 0.0 and playing:
+	if alert_add > 0.0 and playing and not over:
 		alert = minf(100.0, alert + alert_add)
 		quiet_t = 2.5
 		if alert >= 100.0:

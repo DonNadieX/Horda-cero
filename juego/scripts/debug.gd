@@ -11,7 +11,7 @@ extends Control
 # - Informe completo para compartir: se copia al portapapeles y se guarda (con una captura
 #   de pantalla) en Descargas/HordaCero o Documentos/HordaCero.
 
-const VERSION := "1.1"
+const VERSION := "1.2"
 const DIR := "user://depuracion"
 
 
@@ -72,6 +72,14 @@ static var spikes := 0
 static var peaks := {}
 static var prof_avg := {}
 static var last_shot: Image = null
+static var play_frames := 0
+static var play_sum := 0.0
+static var menu_frames := 0
+static var menu_sum := 0.0
+static var skipped := 0
+static var gpu_avg := 0.0
+static var rcpu_avg := 0.0
+static var gpu_ok := false
 
 var game
 var font: Font
@@ -160,12 +168,16 @@ static func _tail(txt: String, n: int) -> String:
 static func device_info() -> String:
 	var s := PackedStringArray()
 	s.append("Sistema: %s %s · Modelo: %s" % [OS.get_name(), OS.get_version(), OS.get_model_name()])
-	s.append("CPU: %s · %d núcleos" % [OS.get_processor_name(), OS.get_processor_count()])
+	var cpu_name := OS.get_processor_name().strip_edges()
+	s.append("CPU: %s · %d núcleos" % [cpu_name if cpu_name != "" else "nombre no disponible", OS.get_processor_count()])
 	s.append("GPU: %s (%s) · API %s" % [RenderingServer.get_video_adapter_name(), RenderingServer.get_video_adapter_vendor(), RenderingServer.get_video_adapter_api_version()])
 	s.append("Renderizador: %s / %s" % [RenderingServer.get_current_rendering_method(), RenderingServer.get_current_rendering_driver_name()])
 	s.append("Motor: Godot %s" % Engine.get_version_info()["string"])
 	var mi := OS.get_memory_info()
-	s.append("Memoria del equipo: %d MB en total, %d MB disponibles" % [int(mi.get("physical", -1) / 1048576), int(mi.get("available", -1) / 1048576)])
+	if mi.get("physical", -1) > 0:
+		s.append("Memoria del equipo: %d MB en total, %d MB disponibles" % [int(mi["physical"] / 1048576), int(mi.get("available", 0) / 1048576)])
+	else:
+		s.append("Memoria del equipo: el sistema no la informa")
 	s.append("Pantalla: %s · %d ppp · %.0f Hz · Ventana %s (modo %s) · Zona segura %s" % [DisplayServer.screen_get_size(), DisplayServer.screen_get_dpi(), DisplayServer.screen_get_refresh_rate(), DisplayServer.window_get_size(), _mode_name(DisplayServer.window_get_mode()), DisplayServer.get_display_safe_area()])
 	return "\n".join(s)
 
@@ -199,6 +211,7 @@ func setup(g) -> void:
 	last_us = Time.get_ticks_usec()
 	graph.resize(150)
 	graph.fill(0.0)
+	RenderingServer.viewport_set_measure_render_time(get_viewport().get_viewport_rid(), true)
 
 
 func _process(_delta: float) -> void:
@@ -208,6 +221,25 @@ func _process(_delta: float) -> void:
 	_pull_errors()
 	if game == null or game.player == null or testing:
 		return
+	var paused: bool = get_tree().paused
+	# Fotogramas en pausa o al volver de segundo plano no cuentan para las estadisticas.
+	if paused or ms > 1200.0:
+		if ms > 1200.0:
+			skipped += 1
+		return
+	var vp := get_viewport().get_viewport_rid()
+	var g_ms := RenderingServer.viewport_get_measured_render_time_gpu(vp)
+	var c_ms := RenderingServer.viewport_get_measured_render_time_cpu(vp)
+	if g_ms > 0.0:
+		gpu_ok = true
+	gpu_avg = lerpf(gpu_avg, g_ms, 0.05)
+	rcpu_avg = lerpf(rcpu_avg, c_ms, 0.05)
+	if game.playing:
+		play_frames += 1
+		play_sum += ms
+	else:
+		menu_frames += 1
+		menu_sum += ms
 	frames += 1
 	ft_sum += ms
 	if ft_hist.size() < 40000:
@@ -223,8 +255,7 @@ func _process(_delta: float) -> void:
 		var v: float = game.prof[k] / 1000.0
 		prof_avg[k] = lerpf(prof_avg.get(k, v), v, 0.05)
 		game.prof[k] = 0
-	var paused: bool = get_tree().paused
-	if ms > 60.0 and not paused and (Time.get_ticks_msec() - start_ms) > 4000:
+	if ms > 60.0 and (Time.get_ticks_msec() - start_ms) > 4000:
 		spikes += 1
 		var ctx := _context()
 		worst.append([ms, (Time.get_ticks_msec() - start_ms) / 1000.0, ctx])
@@ -249,13 +280,17 @@ func _process(_delta: float) -> void:
 		peak("llamadas_dibujo", Performance.get_monitor(Performance.RENDER_TOTAL_DRAW_CALLS_IN_FRAME))
 		peak("ms_fotograma", max_shown)
 		if enabled and game.playing:
-			note("MUESTRA", "fps %.0f · %.1f ms (máx %.0f) · %s" % [fps_shown, ms_shown, max_shown, _context()])
+			note("MUESTRA", "fps %.0f · %.1f ms (máx %.0f) · GPU %s · scripts %.1f ms · %s" % [fps_shown, ms_shown, max_shown, ("%.1f ms" % gpu_avg) if gpu_ok else "n/d", _script_ms(), _context()])
 		sec_t = 0.0
 		sec_frames = 0
 		sec_sum = 0.0
 		sec_max = 0.0
 	if enabled:
 		queue_redraw()
+
+
+static func _script_ms() -> float:
+	return (Performance.get_monitor(Performance.TIME_PROCESS) + Performance.get_monitor(Performance.TIME_PHYSICS_PROCESS)) * 1000.0
 
 
 func _pull_errors() -> void:
@@ -288,6 +323,12 @@ func _t(pos: Vector2, text: String, col := Color(0.9, 1.0, 0.9), sz := 15) -> vo
 func _draw() -> void:
 	if not enabled or game == null or game.player == null or game.hud.overlay_on:
 		return
+	var t_draw := Time.get_ticks_usec()
+	_draw_panel()
+	game.prof["depuracion"] = game.prof.get("depuracion", 0) + Time.get_ticks_usec() - t_draw
+
+
+func _draw_panel() -> void:
 	var x := size.x * 0.5 - 300.0
 	var y := 140.0
 	draw_rect(Rect2(x - 8, y - 18, 616, 232), Color(0, 0, 0, 0.55))
@@ -306,7 +347,7 @@ func _draw() -> void:
 		pr.append("%s %.2f" % [k, prof_avg[k]])
 	_t(Vector2(x, y), "CPU ms/fotograma: " + " · ".join(pr))
 	y += 18
-	_t(Vector2(x, y), "Motor: proceso %.1f ms · física %.1f ms · texturas generadas en %d ms" % [Performance.get_monitor(Performance.TIME_PROCESS) * 1000.0, Performance.get_monitor(Performance.TIME_PHYSICS_PROCESS) * 1000.0, tex_ms])
+	_t(Vector2(x, y), "Motor: proceso %.1f ms · física %.1f ms · GPU %s · render CPU %.1f ms · %s" % [Performance.get_monitor(Performance.TIME_PROCESS) * 1000.0, Performance.get_monitor(Performance.TIME_PHYSICS_PROCESS) * 1000.0, ("%.1f ms" % gpu_avg) if gpu_ok else "n/d", rcpu_avg, "720p" if game.settings["res_reducida"] else "nativa"])
 	y += 18
 	_t(Vector2(x, y), "Ventana %s · %s · zona segura %s" % [DisplayServer.window_get_size(), _mode_name(DisplayServer.window_get_mode()), DisplayServer.get_display_safe_area()])
 	y += 18
@@ -444,6 +485,12 @@ static func build_report(g) -> String:
 		sorted.sort()
 		var p := func(q: float) -> float: return sorted[clampi(int(sorted.size() * q), 0, sorted.size() - 1)]
 		s.append("Fotogramas medidos: %d · media %.1f ms (%.0f fps) · mediana %.1f ms · p95 %.1f ms · p99 %.1f ms · peor %.1f ms" % [frames, ft_sum / frames, 1000.0 / (ft_sum / frames), p.call(0.5), p.call(0.95), p.call(0.99), sorted[-1]])
+	if play_frames > 0:
+		s.append("Jugando: %d fotogramas · media %.1f ms (%.0f fps)" % [play_frames, play_sum / play_frames, 1000.0 / (play_sum / play_frames)])
+	if menu_frames > 0:
+		s.append("Menús: %d fotogramas · media %.1f ms (%.0f fps)" % [menu_frames, menu_sum / menu_frames, 1000.0 / (menu_sum / menu_frames)])
+	s.append("GPU media: %s · render CPU media: %.1f ms · scripts (proceso+física) ahora: %.1f ms" % [("%.1f ms" % gpu_avg) if gpu_ok else "no disponible en este dispositivo", rcpu_avg, _script_ms()])
+	s.append("Fotogramas ignorados (segundo plano/carga): %d" % skipped)
 	s.append("Picos de más de 60 ms: %d · texturas generadas en %d ms" % [spikes, tex_ms])
 	s.append("Máximos: " + str(peaks))
 	var pr := PackedStringArray()
@@ -453,6 +500,8 @@ static func build_report(g) -> String:
 	s.append("Peores fotogramas:")
 	for w in worst:
 		s.append("  %.0f ms en t=%.1f s · %s" % [w[0], w[1], w[2]])
+	s.append("\n== DIAGNÓSTICO AUTOMÁTICO ==")
+	s.append(_diagnose(g))
 	s.append("\n== PRUEBA DE LUCES ==")
 	s.append(light_report if light_report != "" else "No realizada (Ajustes > Prueba de luces)")
 	s.append("\n== ESTADO ACTUAL ==")
@@ -474,6 +523,38 @@ static func build_report(g) -> String:
 		s.append("\n== godot.log (últimas líneas) ==")
 		s.append(_tail(FileAccess.get_file_as_string(glog), 150))
 	return "\n".join(s)
+
+
+static func _diagnose(g) -> String:
+	var d := PackedStringArray()
+	if frames == 0:
+		return "Sin datos todavía."
+	var avg := ft_sum / frames
+	var scripts := 0.0
+	for k in prof_avg:
+		scripts += prof_avg[k]
+	if avg > 20.0:
+		if gpu_ok and gpu_avg > avg * 0.6:
+			d.append("Limitado por la GPU (%.1f de %.1f ms). Ayuda: resolución reducida, relieve NO, sombras NO." % [gpu_avg, avg])
+		elif scripts > avg * 0.4:
+			d.append("Limitado por la CPU de los scripts (%.1f de %.1f ms): mira qué sistema domina en el perfil." % [scripts, avg])
+		elif menu_frames > 30 and menu_sum / menu_frames > 25.0:
+			d.append("Incluso en los menús va a %.0f fps con los scripts casi parados: el cuello de botella es el dibujado (GPU/resolución)." % (1000.0 / (menu_sum / menu_frames)))
+		else:
+			d.append("Fotograma medio de %.1f ms; los scripts suman %.1f ms: el resto es dibujado y sistema." % [avg, scripts])
+	else:
+		d.append("Rendimiento correcto (%.1f ms de media)." % avg)
+	if prof_avg.get("ia", 0.0) > 4.0:
+		d.append("La IA de los infectados pesa (%.1f ms)." % prof_avg["ia"])
+	if prof_avg.get("hud", 0.0) > 2.0:
+		d.append("El HUD tarda %.1f ms en dibujarse." % prof_avg["hud"])
+	if prof_avg.get("depuracion", 0.0) > 1.0:
+		d.append("El propio panel de depuración consume %.1f ms." % prof_avg["depuracion"])
+	if error_total > 0:
+		d.append("Hay %d errores del motor: revisa la sección de errores." % error_total)
+	if not g.settings["res_reducida"] and DisplayServer.window_get_size().x > 1920:
+		d.append("Pantalla de %s a resolución nativa: prueba 'Resolución reducida'." % DisplayServer.window_get_size())
+	return "\n".join(d)
 
 
 # Devuelve un texto para mostrar con lo que se pudo hacer.

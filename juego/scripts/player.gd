@@ -11,7 +11,7 @@ const RADIUS := 13.0
 const SPEED := 205.0
 
 const WEAPONS := [
-	{"id": "pistola", "name": "PISTOLA", "dmg": 28.0, "rate": 0.2, "mag_base": 12, "reserve": -1, "reserve_max": -1, "spread": 0.035, "pellets": 1, "noise": 340.0, "alert": 2.5, "speed": 1500.0, "pierce": 0, "reload": 1.0, "snd": "pistol", "limb": 1.0, "bolt": false, "owned": true},
+	{"id": "pistola", "name": "PISTOLA", "dmg": 28.0, "rate": 0.2, "mag_base": 12, "reserve": -1, "reserve_max": -1, "spread": 0.035, "pellets": 1, "noise": 340.0, "alert": 2.0, "speed": 1500.0, "pierce": 0, "reload": 1.0, "snd": "pistol", "limb": 1.0, "bolt": false, "owned": true},
 	{"id": "ballesta", "name": "BALLESTA", "dmg": 85.0, "rate": 0.12, "mag_base": 1, "reserve": 20, "reserve_max": 40, "spread": 0.0, "pellets": 1, "noise": 40.0, "alert": 0.0, "speed": 1150.0, "pierce": 3, "reload": 0.75, "snd": "bow", "limb": 1.3, "bolt": true, "owned": true},
 	{"id": "escopeta", "name": "ESCOPETA", "dmg": 15.0, "rate": 0.72, "mag_base": 6, "reserve": 30, "reserve_max": 48, "spread": 0.2, "pellets": 8, "noise": 640.0, "alert": 6.0, "speed": 1300.0, "pierce": 0, "reload": 1.9, "snd": "shotgun", "limb": 1.6, "bolt": false, "owned": false},
 	{"id": "fusil", "name": "FUSIL", "dmg": 20.0, "rate": 0.09, "mag_base": 30, "reserve": 150, "reserve_max": 240, "spread": 0.06, "pellets": 1, "noise": 500.0, "alert": 1.6, "speed": 1700.0, "pierce": 0, "reload": 1.6, "snd": "rifle", "limb": 1.0, "bolt": false, "owned": false},
@@ -233,6 +233,7 @@ func _physics_process(delta: float) -> void:
 	fire_cd -= delta
 	recoil = move_toward(recoil, 0.0, delta * 8.0)
 	muzzle_light.energy = move_toward(muzzle_light.energy, 0.0, delta * 14.0)
+	muzzle_light.enabled = muzzle_light.energy > 0.01
 
 	if dodge_t > 0.0:
 		dodge_t -= delta

@@ -52,6 +52,10 @@ var charge_t := 0.0
 var charge_dir := Vector2.ZERO
 var stun_t := 0.0
 var shape: CollisionShape2D
+var frame_i := randi() % 4
+var far := false
+var cached_dir := Vector2.ZERO
+var cached_spd := 0.0
 
 
 func setup(g, k: String, pos: Vector2, start_aggro: bool) -> void:
@@ -166,47 +170,57 @@ func _tick(delta: float) -> void:
 	if not aggro and not p.dead and dist < cfg["sense"] * p.sense_mult():
 		become_aggro()
 
-	# Objetivo: senuelo (bengala/bomba), jugador o busqueda lenta
-	var new_lure = game.lure_for(global_position)
-	if new_lure != null and (dist > 80.0 or new_lure.kind == "bomb"):
-		lure = new_lure
-		was_lured = true
-	else:
-		lure = null
-		if was_lured:
-			was_lured = false
-			if dist > 260.0:
-				aggro = false
-				think_t = 0.0
-
-	var dir := Vector2.ZERO
-	var spd := 0.0
+	# Los infectados lejanos (fuera de pantalla) piensan 1 de cada 4 fotogramas.
+	frame_i += 1
+	far = dist > 850.0
+	var dir := cached_dir
+	var spd := cached_spd
 	var face_target := false
-	if lure != null:
-		var lp: Vector2 = lure.global_position
-		var dl := global_position.distance_to(lp)
-		if dl < 46.0:
+	if not far or frame_i % 4 == 0:
+		# Objetivo: senuelo (bengala/bomba), jugador o busqueda lenta
+		var new_lure = game.lure_for(global_position)
+		if new_lure != null and (dist > 80.0 or new_lure.kind == "bomb"):
+			lure = new_lure
+			was_lured = true
+		else:
+			lure = null
+			if was_lured:
+				was_lured = false
+				if dist > 260.0:
+					aggro = false
+					think_t = 0.0
+
+		if lure != null:
+			var lp: Vector2 = lure.global_position
+			var dl := global_position.distance_to(lp)
+			if dl < 46.0:
+				if think_t <= 0.0:
+					think_t = randf_range(0.4, 1.0)
+					drift = Vector2.from_angle(randf() * TAU)
+				dir = drift
+				spd = 18.0
+			else:
+				dir = (lp - global_position).normalized() if dl < 150.0 else game.field_dir(lure.field, global_position)
+				spd = run_speed * 0.9
+		elif aggro and not p.dead:
+			dir = dp / maxf(dist, 0.01) if dist < 150.0 else game.field_dir(game.pfield, global_position)
+			spd = run_speed
+			face_target = dist < 220.0
+		else:
 			if think_t <= 0.0:
-				think_t = randf_range(0.4, 1.0)
-				drift = Vector2.from_angle(randf() * TAU)
-			dir = drift
-			spd = 18.0
-		else:
-			dir = (lp - global_position).normalized() if dl < 150.0 else game.field_dir(lure.field, global_position)
-			spd = run_speed * 0.9
-	elif aggro and not p.dead:
-		dir = dp / maxf(dist, 0.01) if dist < 150.0 else game.field_dir(game.pfield, global_position)
-		spd = run_speed
-		face_target = dist < 220.0
-	else:
-		if think_t <= 0.0:
-			think_t = randf_range(1.5, 4.0)
-			drift = Vector2.from_angle(randf() * TAU) * randf_range(0.2, 0.7)
-		if dist > 380.0:
-			dir = (game.field_dir(game.pfield, global_position) + drift).normalized()
-		else:
-			dir = drift.normalized()
-		spd = cfg["walk"]
+				think_t = randf_range(1.5, 4.0)
+				drift = Vector2.from_angle(randf() * TAU) * randf_range(0.2, 0.7)
+			if dist > 380.0:
+				var fd: Vector2 = game.field_dir(game.pfield, global_position)
+				if fd == Vector2.ZERO:
+					fd = dp / dist
+				dir = (fd + drift).normalized()
+			else:
+				dir = drift.normalized()
+			spd = cfg["walk"]
+
+		cached_dir = dir
+		cached_spd = spd
 
 	if dir == Vector2.ZERO and dist > 1.0:
 		dir = dp / dist
@@ -261,7 +275,8 @@ func _tick(delta: float) -> void:
 	if face_target:
 		face = dp.angle()
 	body.rotation = lerp_angle(body.rotation, face, 1.0 - exp(-9.0 * delta))
-	_animate(delta)
+	if not far or frame_i % 4 == 0:
+		_animate(delta)
 
 	groan_t -= delta
 	if groan_t <= 0.0:
