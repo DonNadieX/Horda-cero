@@ -27,6 +27,7 @@ func add(kind: int, pos: Vector2, vel: Vector2, life: float, size: float, col: C
 
 
 func _process(delta: float) -> void:
+	var t0 := Time.get_ticks_usec()
 	var alive: Array = []
 	for p in ps:
 		p[3] -= delta
@@ -36,9 +37,12 @@ func _process(delta: float) -> void:
 			alive.append(p)
 	ps = alive
 	queue_redraw()
+	if game != null:
+		game.prof["efectos"] += Time.get_ticks_usec() - t0
 
 
 func _draw() -> void:
+	var t0 := Time.get_ticks_usec()
 	for p in ps:
 		var k: int = p[0]
 		var pos: Vector2 = p[1]
@@ -70,6 +74,8 @@ func _draw() -> void:
 				draw_circle(pos, sz * 0.4 * t + 2.0, Color(1, 1, 0.85, t))
 	if draw_bullets and game != null:
 		_draw_combat()
+	if game != null:
+		game.prof["efectos"] += Time.get_ticks_usec() - t0
 
 
 func _draw_combat() -> void:

@@ -46,6 +46,7 @@ var dodge_t := 0.0
 var dodge_dir := Vector2.ZERO
 var inv_t := 0.0
 var knock := Vector2.ZERO
+var move_vel := Vector2.ZERO
 var walk_ph := 0.0
 var recoil := 0.0
 var flares := 2
@@ -105,20 +106,20 @@ func setup(g) -> void:
 	cone = PointLight2D.new()
 	cone.texture = game.tex.light_cone
 	cone.texture_scale = 4.4
-	cone.energy = 1.15
+	cone.energy = 1.35
 	cone.color = Color(1.0, 0.95, 0.82)
-	cone.shadow_enabled = true
-	cone.shadow_filter = Light2D.SHADOW_FILTER_PCF5
-	cone.shadow_filter_smooth = 2.0
 	cone.shadow_color = Color(0, 0, 0, 0.85)
 	cone.height = 90.0
+	cone.add_to_group("luces")
 	add_child(cone)
+	apply_shadows()
 	glow = PointLight2D.new()
 	glow.texture = game.tex.light_round
 	glow.texture_scale = 1.5
 	glow.energy = 0.5
 	glow.color = Color(0.85, 0.9, 1.0)
 	glow.height = 70.0
+	glow.add_to_group("luces")
 	add_child(glow)
 	muzzle_light = PointLight2D.new()
 	muzzle_light.texture = game.tex.light_round
@@ -126,7 +127,19 @@ func setup(g) -> void:
 	muzzle_light.energy = 0.0
 	muzzle_light.color = Color(1.0, 0.75, 0.4)
 	muzzle_light.height = 60.0
+	muzzle_light.add_to_group("luces")
 	add_child(muzzle_light)
+
+
+# Sombras de la linterna: bonitas pero caras, y en algunas GPU moviles dejan la luz a oscuras.
+func apply_shadows() -> void:
+	var on: bool = game.settings["sombras"]
+	cone.shadow_enabled = on
+	if OS.has_feature("mobile"):
+		cone.shadow_filter = Light2D.SHADOW_FILTER_NONE
+	else:
+		cone.shadow_filter = Light2D.SHADOW_FILTER_PCF5
+		cone.shadow_filter_smooth = 2.0
 
 
 func weapon() -> Dictionary:
@@ -225,14 +238,17 @@ func _physics_process(delta: float) -> void:
 		dodge_t -= delta
 		collision_mask = L_WALL
 		velocity = dodge_dir * 640.0
+		move_vel = velocity
 		game.fx_ground.add(game.fx_ground.SMOKE, global_position, Vector2.ZERO, 0.35, 10.0, Color(0.6, 0.6, 0.65, 0.5))
 	else:
 		collision_mask = L_WALL | L_ZOMBIE
 		var spd: float = SPEED * (1.0 + 0.1 * game.up("botas"))
 		if trigger:
 			spd *= 0.85
-		velocity = velocity.lerp(move * spd, 1.0 - exp(-14.0 * delta)) + knock
-	knock = knock.move_toward(Vector2.ZERO, 1600.0 * delta)
+		# El empuje se suma aparte para que no se acumule de un fotograma a otro.
+		move_vel = move_vel.lerp(move * spd, 1.0 - exp(-14.0 * delta))
+		velocity = move_vel + knock
+	knock = knock.move_toward(Vector2.ZERO, 1500.0 * delta)
 	move_and_slide()
 	position = position.clamp(Vector2(20, 20), Vector2(game.WORLD - 20.0, game.WORLD - 20.0))
 
@@ -453,7 +469,7 @@ func take_damage(amount: float, from_pos: Vector2) -> void:
 	hp -= amount
 	inv_t = 0.3
 	var dir := (global_position - from_pos).normalized()
-	knock = dir * 260.0
+	knock = dir * 120.0
 	game.hud.hurt(amount)
 	game.sfx.play("hurt", -2.0)
 	game.shake_cam(7.0)

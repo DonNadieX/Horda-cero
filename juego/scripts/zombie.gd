@@ -37,6 +37,7 @@ var atk_t := 0.0
 var atk_cd := 0.0
 var flash := 0.0
 var knock := Vector2.ZERO
+var move_vel := Vector2.ZERO
 var groan_t := 0.0
 var think_t := 0.0
 var drift := Vector2.ZERO
@@ -147,6 +148,12 @@ func arms_left() -> int:
 func _physics_process(delta: float) -> void:
 	if dead or not game.playing:
 		return
+	var t0 := Time.get_ticks_usec()
+	_tick(delta)
+	game.prof["ia"] += Time.get_ticks_usec() - t0
+
+
+func _tick(delta: float) -> void:
 	atk_cd -= delta
 	flash -= delta
 	think_t -= delta
@@ -243,9 +250,11 @@ func _physics_process(delta: float) -> void:
 	if stun_t > 0.0:
 		spd = 0.0
 
+	# El empuje se suma aparte para que no se acumule de un fotograma a otro.
 	var want := dir * spd
-	velocity = velocity.lerp(want, 1.0 - exp(-8.0 * delta)) + knock
-	knock = knock.move_toward(Vector2.ZERO, 1100.0 * delta)
+	move_vel = move_vel.lerp(want, 1.0 - exp(-8.0 * delta))
+	velocity = move_vel + knock
+	knock = knock.move_toward(Vector2.ZERO, 1400.0 * delta)
 	move_and_slide()
 
 	var face := velocity.angle() if velocity.length() > 6.0 else body.rotation
@@ -353,7 +362,7 @@ func _brute(delta: float, dist: float, dp: Vector2) -> bool:
 		var p = game.player
 		if dist < radius + 22.0 and not p.dead:
 			p.take_damage(_damage() * 1.2, global_position)
-			p.knock = charge_dir * 620.0
+			p.knock = charge_dir * 380.0
 			charge_t = 0.0
 			game.shake_cam(10.0)
 		elif get_slide_collision_count() > 0:
@@ -365,7 +374,7 @@ func _brute(delta: float, dist: float, dp: Vector2) -> bool:
 				game.shake_cam(8.0)
 				game.sfx.play("hit", 4.0, global_position, 0.5)
 			elif other != null and other.is_in_group("zombies") and other != self:
-				other.knock = charge_dir.orthogonal() * (300.0 if randf() < 0.5 else -300.0)
+				other.knock = charge_dir.orthogonal() * (170.0 if randf() < 0.5 else -170.0)
 		return true
 	if aggro and charge_cd <= 0.0 and stun_t <= 0.0 and dist > 150.0 and dist < 430.0 and legs_left() > 0:
 		charge_cd = randf_range(4.5, 6.5)
@@ -405,7 +414,8 @@ func hit(dmg: float, point: Vector2, dir: Vector2, limb_mult := 1.0) -> void:
 	if dead:
 		return
 	var part := _pick_part(point, dir)
-	knock += dir * (55.0 / s)
+	knock += dir * (24.0 / s)
+	knock = knock.limit_length(160.0)
 	become_aggro()
 	_apply(part, dmg, dir, limb_mult, point)
 
@@ -421,7 +431,7 @@ func slash(dmg: float, dir: Vector2) -> void:
 		part = "arm_l" if randf() < 0.5 else "arm_r"
 	if part != "torso" and not has[part]:
 		part = "torso"
-	knock += dir * (260.0 / s)
+	knock = (knock + dir * (140.0 / s)).limit_length(200.0)
 	stun_t = maxf(stun_t, 0.25 if kind != "bruto" else 0.0)
 	atk_t = 0.0
 	become_aggro()
@@ -431,7 +441,7 @@ func slash(dmg: float, dir: Vector2) -> void:
 func blast(dmg: float, dir: Vector2) -> void:
 	if dead:
 		return
-	knock += dir * (520.0 / s)
+	knock = (knock + dir * (300.0 / s)).limit_length(320.0)
 	become_aggro()
 	var chance := clampf(dmg / (hp + 60.0), 0.0, 0.85)
 	for l in LIMBS:

@@ -37,6 +37,7 @@ func setup(g, k: String, from: Vector2, to: Vector2) -> void:
 	light = PointLight2D.new()
 	light.texture = game.tex.light_round
 	light.shadow_enabled = false
+	light.add_to_group("luces")
 	light.height = 60.0
 	add_child(light)
 	if kind == "flare":

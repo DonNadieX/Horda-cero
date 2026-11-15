@@ -15,6 +15,7 @@ const ThrowScript = preload("res://scripts/throwable.gd")
 const FxScript = preload("res://scripts/fx.gd")
 const HudScript = preload("res://scripts/hud.gd")
 const SfxScript = preload("res://scripts/sfx.gd")
+const Dbg = preload("res://scripts/debug.gd")
 
 const WORLD := 2560.0
 const CELL := 32.0
@@ -51,6 +52,7 @@ const UPGRADES := {
 
 static var tex_cache = null
 static var autostart := false
+static var settings := {}
 
 var tex
 var sfx
@@ -103,10 +105,17 @@ var limbs := 0
 var time_played := 0.0
 var best := 0
 var upgrades := {}
+var debug
+var prof := {"ia": 0, "campo": 0, "balas": 0, "restos": 0, "efectos": 0, "hud": 0}
+var fs_t := 0.0
 
 
 func _ready() -> void:
 	rng.randomize()
+	_load_settings()
+	Dbg.init_session()
+	Dbg.enabled = settings["depuracion"]
+	ensure_fullscreen()
 	sfx = SfxScript.new()
 	add_child(sfx)
 	var layer := CanvasLayer.new()
@@ -115,16 +124,25 @@ func _ready() -> void:
 	hud = HudScript.new()
 	layer.add_child(hud)
 	hud.setup(self)
+	debug = Dbg.new()
+	layer.add_child(debug)
+	debug.setup(self)
 	best = _load_best()
 	if tex_cache == null:
 		hud.show_loading()
 		await get_tree().process_frame
 		await get_tree().process_frame
+		var t0 := Time.get_ticks_msec()
 		var t = TexLib.new()
+		t.relief = settings["relieve"]
 		t.build()
 		tex_cache = t
+		Dbg.tex_ms = Time.get_ticks_msec() - t0
+		Dbg.note("INFO", "Texturas generadas en %d ms" % Dbg.tex_ms)
 	tex = tex_cache
+	var tb := Time.get_ticks_msec()
 	_build_world()
+	Dbg.note("INFO", "Ciudad construida en %d ms" % (Time.get_ticks_msec() - tb))
 	if autostart:
 		autostart = false
 		start_game()
@@ -136,6 +154,66 @@ func _ready() -> void:
 
 func up(id: String) -> int:
 	return upgrades.get(id, 0)
+
+
+# ------------------------------------------------------------------ ajustes
+
+func _load_settings() -> void:
+	if not settings.is_empty():
+		return
+	var mobile := OS.has_feature("mobile")
+	settings = {"sombras": not mobile, "relieve": true, "vibracion": true, "depuracion": false}
+	var cf := ConfigFile.new()
+	if cf.load("user://ajustes.cfg") == OK:
+		for k in settings:
+			settings[k] = cf.get_value("ajustes", k, settings[k])
+
+
+func set_setting(k: String, v) -> void:
+	settings[k] = v
+	var cf := ConfigFile.new()
+	for key in settings:
+		cf.set_value("ajustes", key, settings[key])
+	cf.save("user://ajustes.cfg")
+	Dbg.note("AJUSTE", "%s = %s" % [k, v])
+	match k:
+		"sombras":
+			if player != null:
+				player.apply_shadows()
+		"relieve":
+			if tex != null:
+				tex.set_relief(v)
+		"depuracion":
+			Dbg.enabled = v
+			debug.queue_redraw()
+
+
+func ensure_fullscreen() -> void:
+	if not OS.has_feature("mobile"):
+		return
+	var m := DisplayServer.window_get_mode()
+	if m != DisplayServer.WINDOW_MODE_FULLSCREEN and m != DisplayServer.WINDOW_MODE_EXCLUSIVE_FULLSCREEN:
+		DisplayServer.window_set_mode(DisplayServer.WINDOW_MODE_FULLSCREEN)
+		Dbg.note("PANTALLA", "Modo inmersivo reactivado (estaba en: %s)" % Dbg._mode_name(m))
+
+
+func _notification(what: int) -> void:
+	match what:
+		NOTIFICATION_APPLICATION_FOCUS_IN, NOTIFICATION_APPLICATION_RESUMED:
+			ensure_fullscreen()
+			if what == NOTIFICATION_APPLICATION_RESUMED:
+				Dbg.app_paused(false)
+		NOTIFICATION_APPLICATION_PAUSED:
+			Dbg.app_paused(true)
+		NOTIFICATION_WM_CLOSE_REQUEST:
+			Dbg.end_session()
+
+
+func debug_report() -> String:
+	var img: Image = Dbg.last_shot
+	if img == null:
+		img = get_viewport().get_texture().get_image()
+	return Dbg.export_report(self, img)
 
 
 # ------------------------------------------------------------------ construccion del mundo
@@ -158,6 +236,7 @@ func _build_world() -> void:
 	decal_node.draw.connect(_draw_decals)
 	fx_ground = FxScript.new()
 	fx_ground.z_index = -7
+	fx_ground.game = self
 	world.add_child(fx_ground)
 	gib_node = Node2D.new()
 	gib_node.z_index = -6
@@ -530,6 +609,7 @@ func _lamps() -> void:
 		sp.z_index = 6
 		world.add_child(sp)
 		var l := PointLight2D.new()
+		l.add_to_group("luces")
 		l.texture = tex.light_round
 		l.texture_scale = 2.3
 		l.energy = 1.25
@@ -784,6 +864,7 @@ func _start_wave() -> void:
 	for i in idle:
 		_spawn_zombie(_roll_kind(), _random_free(player.global_position, 600.0), false)
 	to_spawn -= idle
+	Dbg.note("JUEGO", "Empieza la oleada %d (%d por aparecer)" % [wave, to_spawn + idle])
 	hud.banner("OLEADA %d" % wave, "Hay ruido en la ciudad..." if wave > 1 else "Usa la ballesta y el machete para no hacer ruido")
 	sfx.play("wave", -2.0)
 
@@ -886,6 +967,7 @@ func _offer_upgrades() -> void:
 
 func apply_upgrade(id: String) -> void:
 	upgrades[id] = up(id) + 1
+	Dbg.note("JUEGO", "Mejora elegida: " + id)
 	var lvl := up(id)
 	match id:
 		"escopeta":
@@ -921,6 +1003,7 @@ func game_over() -> void:
 		return
 	over = true
 	vibrate(300)
+	Dbg.note("JUEGO", "Partida terminada: oleada %d, %d puntos, %d s" % [wave, score, int(time_played)])
 	if score > best:
 		best = score
 		_save_best(best)
@@ -949,8 +1032,13 @@ func _save_best(v: int) -> void:
 func _physics_process(delta: float) -> void:
 	if player == null:
 		return
+	var t0 := Time.get_ticks_usec()
 	_update_bullets(delta)
+	var t1 := Time.get_ticks_usec()
 	_update_gibs(delta)
+	var t2 := Time.get_ticks_usec()
+	prof["balas"] += t1 - t0
+	prof["restos"] += t2 - t1
 	if not playing:
 		return
 	pfield_t -= delta
@@ -960,6 +1048,7 @@ func _physics_process(delta: float) -> void:
 		if c != pcell:
 			pcell = c
 			pfield = compute_field(player.global_position)
+			prof["campo"] += Time.get_ticks_usec() - t2
 
 
 func _process(delta: float) -> void:
@@ -967,6 +1056,10 @@ func _process(delta: float) -> void:
 		return
 	for l in flicker:
 		l.energy = 1.25 if randf() > 0.06 else 0.15
+	fs_t -= delta
+	if fs_t <= 0.0:
+		fs_t = 3.0
+		ensure_fullscreen()
 	_update_camera(delta)
 	_update_pickups(delta)
 	blink_t -= delta
@@ -999,7 +1092,7 @@ func shake_cam(v: float) -> void:
 
 
 func vibrate(ms: int) -> void:
-	if OS.has_feature("mobile"):
+	if OS.has_feature("mobile") and settings["vibracion"]:
 		Input.vibrate_handheld(ms)
 
 
@@ -1022,6 +1115,7 @@ func make_noise(pos: Vector2, radius: float, alert_add: float) -> void:
 
 func _horde() -> void:
 	alert = 30.0
+	Dbg.note("JUEGO", "Horda por ruido (oleada %d, %d zombis vivos)" % [wave, alive_count()])
 	hud.msg("¡LA HORDA TE HA OÍDO!", 3.0, Color(1.0, 0.25, 0.2))
 	hud.alert_flash = 1.0
 	sfx.play("horde", 2.0)
@@ -1135,6 +1229,7 @@ func explode(pos: Vector2, radius: float, dmg: float) -> void:
 		fx_ground.add(fx_ground.SMOKE, pos + Vector2.from_angle(randf() * TAU) * randf_range(0, radius * 0.5), Vector2.from_angle(randf() * TAU) * randf_range(20, 70), randf_range(1.2, 2.4), randf_range(18, 34), Color(0.25, 0.24, 0.24, 0.7), 1.0)
 	add_decal(pos, randf() * TAU, radius / 40.0, SCORCH)
 	var l := PointLight2D.new()
+	l.add_to_group("luces")
 	l.texture = tex.light_round
 	l.texture_scale = radius / 50.0
 	l.energy = 2.6
@@ -1153,7 +1248,7 @@ func explode(pos: Vector2, radius: float, dmg: float) -> void:
 	var pd: float = player.global_position.distance_to(pos)
 	if pd < radius * 0.85:
 		player.take_damage(5.0 + dmg * 0.15 * (1.0 - pd / radius), pos)
-		player.knock = (player.global_position - pos).normalized() * 400.0
+		player.knock = (player.global_position - pos).normalized() * 260.0
 	for b in barrels.duplicate():
 		if is_instance_valid(b) and b.global_position.distance_to(pos) < radius * 0.9:
 			get_tree().create_timer(0.15).timeout.connect(_barrel_explode.bind(b))

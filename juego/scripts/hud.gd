@@ -28,6 +28,11 @@ var banner_t := 0.0
 var t := 0.0
 var overlay: Control
 var overlay_on := false
+var _pause_open := false
+var settings_back := ""
+var screen := ""
+var inset := Vector4.ZERO
+var inset_t := 0.0
 
 
 func setup(g) -> void:
@@ -109,6 +114,7 @@ func _open(dim := 0.72) -> VBoxContainer:
 
 
 func hide_overlay() -> void:
+	screen = ""
 	overlay.visible = false
 	overlay_on = false
 	for c in overlay.get_children():
@@ -123,6 +129,7 @@ func show_loading() -> void:
 
 func show_menu() -> void:
 	var vb := _open(0.55)
+	screen = "menu"
 	vb.add_child(_label("HORDA CERO", 96, Color(0.88, 0.12, 0.08), 14))
 	vb.add_child(_label("Sobrevive a la horda en la ciudad muerta", 26, Color(0.95, 0.85, 0.75)))
 	if game.best > 0:
@@ -130,6 +137,7 @@ func show_menu() -> void:
 	var b := _button("JUGAR", Vector2(340, 96), game.start_game)
 	b.add_theme_font_size_override("font_size", 44)
 	vb.add_child(b)
+	vb.add_child(_button("AJUSTES", Vector2(260, 64), show_settings.bind("menu")))
 	var help := "Joystick izquierdo: moverte   ·   Joystick derecho: apuntar y disparar\n" \
 		+ "Cada disparo hace RUIDO: si llenas el medidor, llega una horda.\n" \
 		+ "La BALLESTA y el MACHETE son silenciosos. Las BENGALAS distraen a los infectados.\n" \
@@ -194,27 +202,112 @@ func toggle_pause() -> void:
 	if not game.playing or game.over:
 		return
 	if get_tree().paused:
-		if overlay_on and _pause_open:
+		if _pause_open:
 			_pause_open = false
 			hide_overlay()
 			get_tree().paused = false
 		return
+	if game.Dbg.enabled:
+		game.Dbg.last_shot = get_viewport().get_texture().get_image()
 	get_tree().paused = true
 	_pause_open = true
+	_show_pause()
+
+
+func _show_pause() -> void:
 	var vb := _open(0.7)
+	screen = "pausa"
 	vb.add_child(_label("PAUSA", 80, Color(0.95, 0.9, 0.85), 12))
-	var b := _button("CONTINUAR", Vector2(340, 90), toggle_pause)
+	var b := _button("CONTINUAR", Vector2(340, 80), toggle_pause)
 	vb.add_child(b)
-	vb.add_child(_button("SALIR AL MENÚ", Vector2(340, 90), game.to_menu))
+	vb.add_child(_button("AJUSTES", Vector2(340, 70), show_settings.bind("pause")))
+	vb.add_child(_button("SALIR AL MENÚ", Vector2(340, 70), game.to_menu))
 	b.grab_focus.call_deferred()
 
 
-var _pause_open := false
+func show_settings(back: String) -> void:
+	settings_back = back
+	var st: Dictionary = game.settings
+	var vb := _open(0.82)
+	screen = "ajustes"
+	vb.add_theme_constant_override("separation", 10)
+	vb.add_child(_label("AJUSTES", 54, Color(0.95, 0.9, 0.85), 10))
+	var grid := GridContainer.new()
+	grid.columns = 2
+	grid.add_theme_constant_override("h_separation", 16)
+	grid.add_theme_constant_override("v_separation", 10)
+	vb.add_child(grid)
+	var opts := [
+		["sombras", "Sombras de la linterna", "Bonitas pero caras; en algunos móviles apagan la luz"],
+		["relieve", "Relieve en texturas", "Mapas de normales: la luz da volumen al suelo y a los personajes"],
+		["vibracion", "Vibración", "Al recibir golpes y con explosiones"],
+		["depuracion", "Modo depuración", "Panel de rendimiento y registro detallado para informes"],
+	]
+	for o in opts:
+		var on: bool = st[o[0]]
+		var b := _button("%s: %s" % [o[1], "SÍ" if on else "NO"], Vector2(470, 62), _toggle_setting.bind(o[0]))
+		b.add_theme_font_size_override("font_size", 22)
+		b.tooltip_text = o[2]
+		grid.add_child(b)
+	var tb := _button("Prueba de luces", Vector2(470, 62), _light_test)
+	tb.add_theme_font_size_override("font_size", 22)
+	grid.add_child(tb)
+	var rb := _button("Copiar y guardar informe", Vector2(470, 62), _report)
+	rb.add_theme_font_size_override("font_size", 22)
+	grid.add_child(rb)
+	vb.add_child(_label("El informe incluye datos del móvil, rendimiento, errores y el registro de la partida.\nSe copia al portapapeles y se guarda en Descargas/HordaCero: pégalo o adjúntalo en el chat.", 17, Color(0.75, 0.75, 0.78), 4))
+	var back_b := _button("VOLVER", Vector2(260, 66), _settings_back)
+	vb.add_child(back_b)
+	back_b.grab_focus.call_deferred()
+
+
+func _toggle_setting(k: String) -> void:
+	game.set_setting(k, not game.settings[k])
+	show_settings(settings_back)
+
+
+func _settings_back() -> void:
+	if settings_back == "pause":
+		_show_pause()
+	else:
+		show_menu()
+
+
+func _light_test() -> void:
+	var back := settings_back
+	hide_overlay()
+	var verdict: String = await game.debug.run_light_test()
+	show_settings(back)
+	_info("Prueba de luces", verdict + "\n\n" + game.Dbg.light_report)
+
+
+func _report() -> void:
+	var r: String = game.debug_report()
+	_info("Informe", r + "\n\nEn Android también puedes pegarlo directamente en el chat.")
+
+
+func _info(title: String, text: String) -> void:
+	var back := settings_back
+	var vb := _open(0.88)
+	screen = "info"
+	vb.add_child(_label(title, 44, Color(1.0, 0.8, 0.4), 8))
+	var l := _label(text, 18, Color(0.92, 0.92, 0.92), 4)
+	l.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	l.custom_minimum_size = Vector2(minf(size.x - 80.0, 1100.0), 0)
+	vb.add_child(l)
+	vb.add_child(_button("VOLVER", Vector2(260, 66), show_settings.bind(back)))
 
 
 func _notification(what: int) -> void:
 	if what == NOTIFICATION_WM_GO_BACK_REQUEST:
-		toggle_pause()
+		match screen:
+			"ajustes", "info":
+				_settings_back()
+			"pausa":
+				toggle_pause()
+			"":
+				if game.playing:
+					toggle_pause()
 	elif what == NOTIFICATION_APPLICATION_PAUSED or what == NOTIFICATION_APPLICATION_FOCUS_OUT:
 		if game != null and game.playing and not get_tree().paused and not overlay_on:
 			toggle_pause()
@@ -239,18 +332,32 @@ func hurt(amount: float) -> void:
 # ------------------------------------------------------------------ controles tactiles
 
 func _buttons() -> Dictionary:
-	var w := size.x
-	var h := size.y
+	# Respeta la zona segura (muesca de la camara, barra de navegacion si aparece).
+	var l := inset.x
+	var w := size.x - inset.y
+	var tp := inset.z
+	var h := size.y - inset.w
 	return {
 		"swing": [Vector2(w - 92.0, h - 320.0), 50.0, "MACHETE", Color(0.75, 0.85, 1.0)],
 		"dodge": [Vector2(w - 222.0, h - 378.0), 44.0, "ESQUIVAR", Color(0.5, 1.0, 0.7)],
-		"reload": [Vector2(w - 205.0, 150.0), 38.0, "RECARGAR", Color(1.0, 0.9, 0.5)],
-		"swap": [Vector2(w - 85.0, 175.0), 42.0, "ARMA", Color(1.0, 0.8, 0.4)],
-		"flare": [Vector2(85.0, h - 320.0), 44.0, "BENGALA", Color(1.0, 0.4, 0.3)],
-		"bomb": [Vector2(205.0, h - 375.0), 42.0, "BOMBA", Color(1.0, 0.65, 0.25)],
-		"light": [Vector2(62.0, 250.0), 32.0, "LUZ", Color(1.0, 1.0, 0.8)],
-		"pause": [Vector2(w - 50.0, 50.0), 28.0, "II", Color(0.9, 0.9, 0.9)],
+		"reload": [Vector2(w - 205.0, tp + 150.0), 38.0, "RECARGAR", Color(1.0, 0.9, 0.5)],
+		"swap": [Vector2(w - 85.0, tp + 175.0), 42.0, "ARMA", Color(1.0, 0.8, 0.4)],
+		"flare": [Vector2(l + 85.0, h - 320.0), 44.0, "BENGALA", Color(1.0, 0.4, 0.3)],
+		"bomb": [Vector2(l + 205.0, h - 375.0), 42.0, "BOMBA", Color(1.0, 0.65, 0.25)],
+		"light": [Vector2(l + 62.0, tp + 250.0), 32.0, "LUZ", Color(1.0, 1.0, 0.8)],
+		"pause": [Vector2(w - 50.0, tp + 50.0), 28.0, "II", Color(0.9, 0.9, 0.9)],
 	}
+
+
+func _update_inset() -> void:
+	var ws := DisplayServer.window_get_size()
+	if ws.x <= 0 or ws.y <= 0:
+		return
+	var sa := DisplayServer.get_display_safe_area()
+	var k := size.x / float(ws.x)
+	inset = Vector4(
+		clampf(sa.position.x * k, 0.0, 160.0), clampf((ws.x - sa.end.x) * k, 0.0, 160.0),
+		clampf(sa.position.y * k, 0.0, 120.0), clampf((ws.y - sa.end.y) * k, 0.0, 120.0))
 
 
 func _button_at(p: Vector2) -> String:
@@ -347,6 +454,10 @@ func _input(event: InputEvent) -> void:
 
 func _process(delta: float) -> void:
 	t += delta
+	inset_t -= delta
+	if inset_t <= 0.0:
+		inset_t = 1.0
+		_update_inset()
 	hurt_t = maxf(0.0, hurt_t - delta * 1.4)
 	acid = maxf(0.0, acid - delta * 0.4)
 	alert_flash = maxf(0.0, alert_flash - delta * 0.8)
@@ -369,6 +480,12 @@ func _bar(pos: Vector2, sz: Vector2, frac: float, col: Color) -> void:
 func _draw() -> void:
 	if game == null or game.player == null or game.tex == null:
 		return
+	var t0 := Time.get_ticks_usec()
+	_draw_hud()
+	game.prof["hud"] += Time.get_ticks_usec() - t0
+
+
+func _draw_hud() -> void:
 	var p = game.player
 	var w := size.x
 	var h := size.y
@@ -459,12 +576,12 @@ func _draw_touch(p) -> void:
 	var w := size.x
 	var h := size.y
 	# Joysticks
-	var mo := move_origin if move_id != -1 else Vector2(170, h - 160)
+	var mo := move_origin if move_id != -1 else Vector2(inset.x + 170, h - inset.w - 160)
 	var mp := move_pos if move_id != -1 else mo
 	draw_circle(mo, STICK_R, Color(1, 1, 1, 0.07 if move_id == -1 else 0.12))
 	draw_arc(mo, STICK_R, 0.0, TAU, 40, Color(1, 1, 1, 0.25), 2.5)
 	draw_circle(mo + (mp - mo).limit_length(STICK_R), 34.0, Color(1, 1, 1, 0.22 if move_id == -1 else 0.4))
-	var ao := aim_origin if aim_id != -1 else Vector2(w - 290, h - 160)
+	var ao := aim_origin if aim_id != -1 else Vector2(w - inset.y - 290, h - inset.w - 160)
 	var ap := aim_pos if aim_id != -1 else ao
 	var firing: bool = aim_vec.length() > 0.42
 	draw_circle(ao, STICK_R, Color(1, 0.3, 0.2, 0.07 if aim_id == -1 else 0.13))

@@ -56,6 +56,18 @@ Para abrirlo en el editor: abre `juego/project.godot` con Godot 4.7 (o 4.3 o sup
 - L: linterna.
 - Esc: pausa.
 
+## Ajustes y modo depuración
+En **Ajustes** (desde el menú o desde la pausa) puedes:
+- Activar o desactivar las **sombras de la linterna** (en móvil vienen desactivadas: son caras y en algunas GPU dejan la luz a oscuras).
+- Activar o desactivar el **relieve** de las texturas, la **vibración** y el **modo depuración**.
+- Hacer una **prueba de luces**: mide el brillo real de la pantalla con distintas configuraciones y desactiva lo que falle en tu móvil.
+- Pulsar **Copiar y guardar informe**: genera un informe completo, lo copia al portapapeles y lo guarda junto con una captura en `Descargas/HordaCero`.
+  El informe incluye el móvil y la GPU, los ajustes, los tiempos por fotograma (media, p95, p99 y peores fotogramas con su contexto), la CPU por sistema, los errores del motor y el registro de la partida.
+  Pégalo o adjúntalo en el chat para analizarlo.
+
+Con el modo depuración activo aparece un panel con FPS, una gráfica de tiempo por fotograma, las llamadas de dibujo, la memoria, el número de objetos y las luces, y el tiempo de CPU de la IA, las balas, los efectos y el HUD.
+Además se guarda una muestra por segundo en el registro.
+
 ## Archivos
 - `juego/scripts/main.gd`: ciudad, director de oleadas, ruido, balas, explosiones, sangre y restos.
 - `juego/scripts/player.gd`: superviviente, armas, machete, esquiva y arrojadizos.
@@ -65,4 +77,5 @@ Para abrirlo en el editor: abre `juego/project.godot` con Godot 4.7 (o 4.3 o sup
 - `juego/scripts/hud.gd`: controles táctiles, interfaz y menús.
 - `juego/scripts/fx.gd`: partículas ligeras.
 - `juego/scripts/sfx.gd`: sonidos sintetizados.
+- `juego/scripts/debug.gd`: modo depuración, registro, prueba de luces e informes.
 - `legado/HordaCero-fps-prototipo.zip`: el prototipo anterior en primera persona.

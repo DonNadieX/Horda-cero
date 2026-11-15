@@ -33,6 +33,8 @@ var splats: Texture2D
 var light_round: Texture2D
 var light_cone: Texture2D
 var vignette: Texture2D
+var all_ct: Array = []
+var relief := true
 
 
 class Pic:
@@ -101,6 +103,20 @@ func build() -> void:
 	acunit = _acunit()
 	lamp = _lamp()
 	_items()
+
+
+func _register(ct: CanvasTexture) -> void:
+	ct.set_meta("normal", ct.normal_texture)
+	all_ct.append(ct)
+	if not relief:
+		ct.normal_texture = null
+
+
+# Activa o desactiva los mapas de normales (relieve) de todas las texturas.
+func set_relief(on: bool) -> void:
+	relief = on
+	for ct in all_ct:
+		ct.normal_texture = ct.get_meta("normal") if on else null
 
 
 # ------------------------------------------------------------------ primitivas de pintura
@@ -246,6 +262,7 @@ func to_tex(p: Pic, bump := 3.0, mip := true) -> CanvasTexture:
 	ct.diffuse_texture = ImageTexture.create_from_image(img)
 	ct.normal_texture = ImageTexture.create_from_image(him)
 	ct.texture_filter = CanvasItem.TEXTURE_FILTER_LINEAR_WITH_MIPMAPS if mip else CanvasItem.TEXTURE_FILTER_LINEAR
+	_register(ct)
 	return ct
 
 
@@ -285,6 +302,7 @@ func _tile_tex(s: int, col: PackedFloat32Array, hgt: PackedFloat32Array, bump: f
 	ct.normal_texture = ImageTexture.create_from_image(him)
 	ct.texture_filter = CanvasItem.TEXTURE_FILTER_LINEAR_WITH_MIPMAPS
 	ct.texture_repeat = CanvasItem.TEXTURE_REPEAT_ENABLED
+	_register(ct)
 	return ct
 
 
