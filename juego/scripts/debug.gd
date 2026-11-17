@@ -11,7 +11,7 @@ extends Control
 # - Informe completo para compartir: se copia al portapapeles y se guarda (con una captura
 #   de pantalla) en Descargas/HordaCero o Documentos/HordaCero.
 
-const VERSION := "1.2"
+const VERSION := "1.3"
 const DIR := "user://depuracion"
 
 

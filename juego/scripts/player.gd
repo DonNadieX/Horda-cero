@@ -351,7 +351,9 @@ func _shoot() -> void:
 		muzzle_light.energy = 1.4 if not quiet else 0.5
 		game.fx_ground.add(game.fx_ground.SHELL, global_position + aim.orthogonal() * 6.0, aim.orthogonal().rotated(randf_range(-0.4, 0.4)) * randf_range(90.0, 150.0), 0.5, 1.0, Color(0.85, 0.65, 0.25), 6.0, randf() * TAU)
 	recoil = 1.0
-	game.shake_cam(2.5 if w["pellets"] == 1 else 6.0)
+	game.shake_cam(3.5 if w["pellets"] == 1 else 8.0)
+	if w["pellets"] > 1:
+		game.zoom_punch(0.025)
 	if w["mag"] == 0 and w["reserve"] != 0:
 		start_reload()
 

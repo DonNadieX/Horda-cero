@@ -243,6 +243,7 @@ func show_settings(back: String) -> void:
 		["relieve", "Relieve en texturas", "Mapas de normales: la luz da volumen al suelo y a los personajes"],
 		["res_reducida", "Resolución reducida", "Dibuja a 720p y escala: muchos más FPS en móviles"],
 		["vibracion", "Vibración", "Al recibir golpes y con explosiones"],
+		["impacto", "Micropausa de impacto", "Una fracción de segundo congelada al decapitar o matar al bruto"],
 		["depuracion", "Modo depuración", "Panel de rendimiento y registro detallado para informes"],
 	]
 	for o in opts:

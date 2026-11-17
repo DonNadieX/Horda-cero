@@ -84,7 +84,12 @@ var pfield := PackedInt32Array()
 var pfield_t := 0.0
 var pcell := Vector2i(-1, -1)
 var rng := RandomNumberGenerator.new()
-var shake := 0.0
+var trauma := 0.0
+var shake_t := 0.0
+var shake_noise := FastNoiseLite.new()
+var zoom_kick := 0.0
+var hitstop_token := 0
+var hitstop_last := 0
 var blink_t := 0.0
 
 var playing := false
@@ -120,6 +125,7 @@ var cull_t := 0.0
 
 
 func _ready() -> void:
+	Engine.time_scale = 1.0
 	rng.randomize()
 	_load_settings()
 	Dbg.init_session()
@@ -172,7 +178,7 @@ func _load_settings() -> void:
 	if not settings.is_empty():
 		return
 	var mobile := OS.has_feature("mobile")
-	settings = {"sombras": not mobile, "relieve": true, "vibracion": true, "depuracion": false, "res_reducida": mobile}
+	settings = {"sombras": not mobile, "relieve": true, "vibracion": true, "depuracion": false, "res_reducida": mobile, "impacto": true}
 	var cf := ConfigFile.new()
 	if cf.load("user://ajustes.cfg") == OK:
 		for k in settings:
@@ -283,6 +289,8 @@ func _build_world() -> void:
 
 	cam = Camera2D.new()
 	cam.zoom = Vector2(1.3, 1.3)
+	cam.ignore_rotation = false
+	shake_noise.frequency = 0.9
 	cam.limit_left = 0
 	cam.limit_top = 0
 	cam.limit_right = int(WORLD)
@@ -913,12 +921,14 @@ func start_game() -> void:
 
 
 func restart() -> void:
+	Engine.time_scale = 1.0
 	autostart = true
 	get_tree().paused = false
 	get_tree().reload_current_scene()
 
 
 func to_menu() -> void:
+	Engine.time_scale = 1.0
 	autostart = false
 	get_tree().paused = false
 	get_tree().reload_current_scene()
@@ -1078,6 +1088,8 @@ func game_over() -> void:
 	if over:
 		return
 	over = true
+	hitstop_token += 1
+	Engine.time_scale = 1.0
 	vibrate(300)
 	Dbg.note("JUEGO", "Partida terminada: oleada %d, %d puntos, %d s" % [wave, score, int(time_played)])
 	if score > best:
@@ -1171,12 +1183,53 @@ func _update_camera(delta: float) -> void:
 	if player.aiming:
 		target += player.aim * 80.0
 	cam.position = cam.position.lerp(target, 1.0 - exp(-6.0 * delta))
-	shake = move_toward(shake, 0.0, delta * 30.0)
-	cam.offset = Vector2(randf_range(-shake, shake), randf_range(-shake, shake))
+	# Temblor por "trauma": cada golpe suma trauma y el temblor crece con su cuadrado,
+	# asi los golpes pequenos apenas mueven la camara y las explosiones la sacuden.
+	var real := delta / maxf(Engine.time_scale, 0.01)
+	trauma = maxf(0.0, trauma - real * 1.6)
+	shake_t += real * 60.0
+	var k := trauma * trauma
+	cam.offset = Vector2(shake_noise.get_noise_2d(shake_t, 0.0), shake_noise.get_noise_2d(0.0, shake_t)) * 26.0 * k
+	cam.rotation = shake_noise.get_noise_2d(shake_t, 100.0) * 0.045 * k
+	# Zoom dinamico (el "FOV" del 2D): se abre al correr y esquivar, y da un golpe en las explosiones.
+	var z := 1.3
+	if player.dodge_t > 0.0:
+		z = 1.2
+	elif player.velocity.length() > 150.0:
+		z = 1.26
+	zoom_kick = move_toward(zoom_kick, 0.0, real * 0.5)
+	var cz := lerpf(cam.zoom.x, z - zoom_kick, 1.0 - exp(-5.0 * real))
+	cam.zoom = Vector2(cz, cz)
 
 
+# Compatibilidad con las llamadas existentes: v es la intensidad en pixeles de antes.
 func shake_cam(v: float) -> void:
-	shake = maxf(shake, v)
+	trauma = minf(1.0, trauma + v / 22.0)
+
+
+func zoom_punch(v: float) -> void:
+	zoom_kick = minf(0.12, zoom_kick + v)
+
+
+# Micropausa de impacto. El temporizador ignora el time_scale (si no, 0,05 s a velocidad
+# 0,1 durarian medio segundo) y un "token" evita que una pausa vieja corte a una nueva.
+func hitstop(dur: float, force := false) -> void:
+	if not settings["impacto"] or over or not playing or get_tree().paused:
+		return
+	var now := Time.get_ticks_msec()
+	if not force and now - hitstop_last < 250:
+		return
+	hitstop_last = now
+	hitstop_token += 1
+	var tok := hitstop_token
+	Engine.time_scale = 0.05
+	await get_tree().create_timer(dur, true, false, true).timeout
+	if tok == hitstop_token:
+		Engine.time_scale = 1.0
+
+
+func _exit_tree() -> void:
+	Engine.time_scale = 1.0
 
 
 func vibrate(ms: int) -> void:
@@ -1307,6 +1360,7 @@ func _barrel_explode(b: Node2D) -> void:
 func explode(pos: Vector2, radius: float, dmg: float) -> void:
 	sfx.play("explode", 4.0, pos)
 	shake_cam(16.0)
+	zoom_punch(0.07)
 	vibrate(120)
 	fx_top.add(fx_top.FLASH, pos, Vector2.ZERO, 0.35, radius * 0.9, Color(1.0, 0.6, 0.25, 0.9))
 	fx_top.add(fx_top.FLASH, pos, Vector2.ZERO, 0.18, radius * 0.45, Color(1.0, 0.95, 0.7, 1.0))
@@ -1451,6 +1505,10 @@ func on_zombie_killed(z, headshot: bool) -> void:
 	if headshot:
 		headshots += 1
 		score += 5
+		hitstop(0.045)
+	if z.kind == "bruto":
+		hitstop(0.14, true)
+		shake_cam(14.0)
 	var pos: Vector2 = z.global_position
 	if z.kind == "bruto":
 		spawn_pickup("med", pos + Vector2(-16, 0))
